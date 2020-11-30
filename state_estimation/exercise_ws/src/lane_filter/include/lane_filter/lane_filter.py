@@ -62,72 +62,43 @@ class LaneFilterHistogramKF():
     def predict(self, dt, left_encoder_delta, right_encoder_delta):
         #TODO update self.belief based on right and left encoder data + kinematics
         del_sr = (right_encoder_delta / 135) * (2 * 3.14 * 0.0318)
-        print('this is del_sr', del_sr)
         mean_del_sr = np.mean(del_sr)
-        print('this is mean del_sr', mean_del_sr)
         del_sl = (left_encoder_delta / 135) * (2 * 3.14 * 0.0318)
         mean_del_sl = np.mean(del_sl)
-        print('this is mean_del_sl', mean_del_sl)
         axel_len = 0.1
-
         del_theta = (del_sr - del_sl) / axel_len
-        print('this is del_theta', del_theta)
         del_s = (del_sr + del_sl) / 2
-        # initial_y = self.belief['mean'][0]
         initial_y = self.sigma_d_0
-        # initial_theta = self.belief['mean'][1]
         initial_theta = self.sigma_phi_0
-        print('initial_theta', initial_theta)
 
         # calculating the components
         del_x = del_s * np.cos(initial_theta + (del_theta / 2))
         del_y = del_s * np.sin(initial_theta + (del_theta / 2))
-        print('this is del_y', del_y)
-
         u_t = (np.array([[del_y, del_theta]])).T
-        print('this is control input shape', u_t.shape)
-        print('this is the control command u_t', u_t)
-
-        # needs work meanu_t = np.mean(u_t) this is wrong since it takes mean of control command, we need state.
         meanu_t = self.mean_0
-        print('this is initual mu guess', meanu_t)
-        # print('this is initual mu shape', meanu_t.shape)
         mu_t = (np.array([meanu_t])).T
-        print('this is initial mu array shape', mu_t.shape)
-
         A = np.array([[del_y, 0], [0, del_theta]])
         print('this is shape of A', A.shape)
         A_gauss = gaussian_filter(A, sigma=0.5)
         print('this is shape of gaussian of A', A_gauss.shape)
         # A = np.array([[1/1-left_slip_ratio, 0], [0, 1/1-right_slip_ratio]])
-        print('this is gaussian A matrix: ', A_gauss)
-
         # B matrix with gaussian filter
         B = np.array([[0, -del_y], [del_theta, 0]])
         B_gauss = gaussian_filter(B, sigma=0.5)
-        print('this is B matrix: ', B.shape)
-        print('this is shape of B_gauss', B_gauss.shape)
 
         ## Predict mu step
         predicted_mu = A_gauss @ mu_t + B @ u_t
-        print('this is predicted_mu', predicted_mu)
-        print('this is predicted_mu shape', predicted_mu.shape)
 
-        # start from here
+        # start from here to calculate jaco
         k = 27
         sigma_sr = (k * abs(del_sr))**2
         sigma_sl = (k * abs(del_sl))**2
         c_x = np.array([[sigma_sr, 0], [0, sigma_sl]])
-        print('this is cov_x', c_x)
-        print('this is shape of covariance matrix', c_x.shape)
-
 
         # jaco_1 = np.array([[0, -del_y], [1, del_x], [0, 1]])
         jaco_1 = np.array([[0, -del_y], [0, 1]])
-        print('this is the first jaco', jaco_1)
-        print('this is shape of first jaco', jaco_1.shape)
 
-        # most likely all cos components will go to 0
+
         p_1 = 0.5 * np.cos(initial_theta + del_theta / 2)
         p_2 = 0.5 * np.sin(initial_theta + del_theta / 2)
         p_3 = (del_s / 2) * (1 / axel_len) * np.cos(initial_theta + del_theta / 2)
@@ -135,8 +106,6 @@ class LaneFilterHistogramKF():
 
         # jaco_2 = np.array([[(p_1 - p_4), (p_1 + p_4)], [(p_2 + p_3), (p_2 - p_3)], [(1 / axel_len), (-1 / axel_len)]])
         jaco_2 = np.array([[(p_2 + p_3), (p_2 - p_3)], [(1 / axel_len), (-1 / axel_len)]])
-        print('this is the second jaco', jaco_2)
-        print('this is shape of second jaco', jaco_2.shape)
 
         # work on this (initial covariance matrix)
         c_x_1 = np.array([[p_2, 0], [p_4, 0]])
@@ -144,14 +113,10 @@ class LaneFilterHistogramKF():
 
         # putting it all together
         c_y = jaco_1 @ c_x_1 @ jaco_1.T + jaco_2 @ c_x @ jaco_2.T
-        print('this is the second covariance', c_y)
-        print('this is shape of second covariance', c_y.shape)
 
         # this is motion noise
         #Q = np.array([[0.3, 0], [0, 0.3]])
         Q = gaussian_filter(c_y, sigma=0.5)
-        print('gaussian filter for noise Q of covariance', Q)
-        print('gaussian filter for noise Q of covariance', Q.shape)
 
         # predict covariance step
         predicted_sigma = A @ c_y @ A.T + Q
@@ -175,10 +140,8 @@ class LaneFilterHistogramKF():
         # min_meas = np.min(measurement_likelihood[np.nonzero(measurement_likelihood)])
         # print('min measurement', min_meas)
         max_meas = np.max(measurement_likelihood)
-        print('min measurement', max_meas)
-
+        
         measure_matrix = np.array([[max_meas, 0], [0, 1]])
-        print('this is measurement matrix', measure_matrix)
 
         # TODO: Parameterize the measurement likelihood as a Gaussian
         if measurement_likelihood is None:
