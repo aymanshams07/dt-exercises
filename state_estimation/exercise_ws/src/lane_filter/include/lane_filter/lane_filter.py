@@ -61,18 +61,220 @@ class LaneFilterHistogramKF():
 
     def predict(self, dt, left_encoder_delta, right_encoder_delta):
         #TODO update self.belief based on right and left encoder data + kinematics
+        del_sr = (right_encoder_delta / 135) * (2 * 3.14 * 0.0318)
+        print('this is del_sr', del_sr)
+        mean_del_sr = np.mean(del_sr)
+        print('this is mean del_sr', mean_del_sr)
+        del_sl = (left_encoder_delta / 135) * (2 * 3.14 * 0.0318)
+        mean_del_sl = np.mean(del_sl)
+        print('this is mean_del_sl', mean_del_sl)
+        axel_len = 0.1
+
+        del_theta = (del_sr - del_sl) / axel_len
+        print('this is del_theta', del_theta)
+        del_s = (del_sr + del_sl) / 2
+        # initial_y = self.belief['mean'][0]
+        initial_y = self.sigma_d_0
+        # initial_theta = self.belief['mean'][1]
+        initial_theta = self.sigma_phi_0
+        print('initial_theta', initial_theta)
+
+        # calculating the components
+        del_x = del_s * np.cos(initial_theta + (del_theta / 2))
+        del_y = del_s * np.sin(initial_theta + (del_theta / 2))
+        print('this is del_y', del_y)
+
+        u_t = (np.array([[del_y, del_theta]])).T
+        print('this is control input shape', u_t.shape)
+        print('this is the control command u_t', u_t)
+
+        # needs work meanu_t = np.mean(u_t) this is wrong since it takes mean of control command, we need state.
+        meanu_t = self.mean_0
+        print('this is initual mu guess', meanu_t)
+        # print('this is initual mu shape', meanu_t.shape)
+        mu_t = (np.array([meanu_t])).T
+        print('this is initial mu array shape', mu_t.shape)
+
+        A = np.array([[del_y, 0], [0, del_theta]])
+        print('this is shape of A', A.shape)
+        A_gauss = gaussian_filter(A, sigma=0.5)
+        print('this is shape of gaussian of A', A_gauss.shape)
+        # A = np.array([[1/1-left_slip_ratio, 0], [0, 1/1-right_slip_ratio]])
+        print('this is gaussian A matrix: ', A_gauss)
+
+        # B matrix with gaussian filter
+        B = np.array([[0, -del_y], [del_theta, 0]])
+        B_gauss = gaussian_filter(B, sigma=0.5)
+        print('this is B matrix: ', B.shape)
+        print('this is shape of B_gauss', B_gauss.shape)
+
+        ## Predict mu step
+        predicted_mu = A_gauss @ mu_t + B @ u_t
+        print('this is predicted_mu', predicted_mu)
+        print('this is predicted_mu shape', predicted_mu.shape)
+
+        # start from here
+        k = 27
+        sigma_sr = (k * abs(del_sr))**2
+        sigma_sl = (k * abs(del_sl))**2
+        c_x = np.array([[sigma_sr, 0], [0, sigma_sl]])
+        print('this is cov_x', c_x)
+        print('this is shape of covariance matrix', c_x.shape)
+
+
+        # jaco_1 = np.array([[0, -del_y], [1, del_x], [0, 1]])
+        jaco_1 = np.array([[0, -del_y], [0, 1]])
+        print('this is the first jaco', jaco_1)
+        print('this is shape of first jaco', jaco_1.shape)
+
+        # most likely all cos components will go to 0
+        p_1 = 0.5 * np.cos(initial_theta + del_theta / 2)
+        p_2 = 0.5 * np.sin(initial_theta + del_theta / 2)
+        p_3 = (del_s / 2) * (1 / axel_len) * np.cos(initial_theta + del_theta / 2)
+        p_4 = (del_s / 2) * (1 / axel_len) * np.sin(initial_theta + del_theta / 2)
+
+        # jaco_2 = np.array([[(p_1 - p_4), (p_1 + p_4)], [(p_2 + p_3), (p_2 - p_3)], [(1 / axel_len), (-1 / axel_len)]])
+        jaco_2 = np.array([[(p_2 + p_3), (p_2 - p_3)], [(1 / axel_len), (-1 / axel_len)]])
+        print('this is the second jaco', jaco_2)
+        print('this is shape of second jaco', jaco_2.shape)
+
+        # work on this (initial covariance matrix)
+        c_x_1 = np.array([[p_2, 0], [p_4, 0]])
+        print('this is shape of c_x_1', c_x_1.shape)
+
+        # putting it all together
+        c_y = jaco_1 @ c_x_1 @ jaco_1.T + jaco_2 @ c_x @ jaco_2.T
+        print('this is the second covariance', c_y)
+        print('this is shape of second covariance', c_y.shape)
+
+        # this is motion noise
+        #Q = np.array([[0.3, 0], [0, 0.3]])
+        Q = gaussian_filter(c_y, sigma=0.5)
+        print('gaussian filter for noise Q of covariance', Q)
+        print('gaussian filter for noise Q of covariance', Q.shape)
+
+        # predict covariance step
+        predicted_sigma = A @ c_y @ A.T + Q
+        print('this is the predicted sigma', predicted_sigma)
+        print('this is the predicted sigma shape', Q.shape)
+
+        self.belief = {'mean': predicted_mu, 'covariance': predicted_sigma}
+        print('this is the current belief', self.belief)
+
         if not self.initialized:
             return
 
     def update(self, segments):
         # prepare the segments for each belief array
         segmentsArray = self.prepareSegments(segments)
-        # generate all belief arrays
 
+        # generate all belief arrays
         measurement_likelihood = self.generate_measurement_likelihood(
             segmentsArray)
+        #print('this is measurement likelihood', measurement_likelihood)
+        # min_meas = np.min(measurement_likelihood[np.nonzero(measurement_likelihood)])
+        # print('min measurement', min_meas)
+        max_meas = np.max(measurement_likelihood)
+        print('min measurement', max_meas)
+
+        measure_matrix = np.array([[max_meas, 0], [0, 1]])
+        print('this is measurement matrix', measure_matrix)
 
         # TODO: Parameterize the measurement likelihood as a Gaussian
+        if measurement_likelihood is None:
+            return
+        maxids = np.unravel_index(measurement_likelihood.argmax(), measurement_likelihood.shape)
+        d_max = self.d_min + (maxids[0] + 0.5) * self.delta_d
+        phi_max = self.phi_min + (maxids[1] + 0.5) * self.delta_phi
+
+        matrix_R = gaussian_filter(measure_matrix, sigma=0.6)
+        print('this is the R noise filter shape', matrix_R.shape)
+
+        # # find distance between centre of duckiebot to the center point of a segment
+        # yellow_segments = [i for i in segmentsArray if i.color == 1]
+        # # print('yellow  segments', yellow_segments)
+        # x_yellow_1 = [i.points[0].x for i in segmentsArray if i.color == 1]
+        # #print('this is x_yellow', x_yellow_1)
+        # x_yellow_1_avg = np.mean(x_yellow_1)
+        # # print('this is x1 average:', x_yellow_1_avg)
+        #
+        # x_yellow_2 = [i.points[1].x for i in segmentsArray if i.color == 1]
+        # #print('this is x_yellow', x_yellow_2)
+        # x_yellow_2_avg = np.mean(x_yellow_2)
+        # # print('this is x2 average:', x_yellow_2_avg)
+        #
+        # x_c = int((x_yellow_1_avg + x_yellow_2_avg)/2)
+        # #print('x_c : ', x_c)
+        #
+        # y_yellow_1 = [i.points[0].y for i in segmentsArray if i.color == 1]
+        # #print('this is y_yellow', y_yellow_1)
+        # y_yellow_1_avg = np.mean(y_yellow_1)
+        # # print('this is y1 average:', y_yellow_1_avg)
+        #
+        # y_yellow_2 = [i.points[1].y for i in segmentsArray if i.color == 1]
+        # #print('this is y_yellow', y_yellow_2)
+        # y_yellow_2_avg = np.mean(y_yellow_2)
+        # # print('this is y2 average:', y_yellow_2_avg)
+        #
+        # y_c = int((y_yellow_1_avg + y_yellow_2_avg)/2)
+        # print('y_c : ', y_c)
+        #
+        # follow_point = x_c, y_c
+        # seg_dist = int(np.sqrt(np.power(follow_point[0], 2) + np.power(follow_point[1], 2)))
+        # #print('segment distance', seg_dist)
+        #
+        # y_comp_cov = int(y_c/seg_dist)
+        # print('y comp of cov H', y_comp_cov)
+        #
+        # #u_t = np.array([[del_y, del_theta]])
+        # angle_update = np.arctan(y_c/x_c)
+
+        z_t = np.array([[d_max, phi_max]])
+        print('this is z_t', z_t)
+        print('this is the shape of', z_t.shape)
+        # this is 2,1 matrix
+        z_trans = z_t.T
+        print('this is z transpose', z_trans.shape)
+        #H = np.array([[y_comp_cov, 0], [0, angle_update]])
+        H = np.array([[1, 0], [0, 1]])
+        print('shape of h ', H.shape)
+        H_gauss = gaussian_filter(H, sigma=0.5)
+        print('this is h matrix', H_gauss)
+        print('this is shape of H_gauss',H_gauss.shape)
+        #pred_mu_up = np.array([self.belief['mean']])
+        pred_mu_up = np.array(self.belief['mean'])
+        print('this is pred mu in update', pred_mu_up)
+        print('this is pred mu in update', pred_mu_up.shape)
+        residual_mean = z_trans - H_gauss @ pred_mu_up
+        print('this is residual mean', residual_mean)
+        print('this is residual mean shape', residual_mean.shape)
+
+        pred_cov_up = np.array(self.belief['covariance'])
+        print('predicted_cov from pred in update step ', pred_cov_up)
+        print('predicted_cov from pred in update step ', pred_cov_up.shape)
+        #residual_cov = H_gauss @ pred_cov_up @ H_gauss.T + gaussian_param
+        residual_cov = H_gauss @ pred_cov_up @ H_gauss.T + matrix_R
+        print('this is the residual cov', residual_cov)
+        print('this is the residual cov', residual_cov.shape)
+
+        H_kal = np.array([[1, 0], [0, 1]])
+        print('this is H_kal shape', H_kal.shape)
+
+        # H_kal_gauss = (H_kal, sigma=0.5)
+        #H_kal = np.array([[[h_multi_pdf, 0], [0, h_multi_pdf]]])
+        kalman_gain = pred_cov_up @ H_kal @ np.linalg.inv(residual_cov)
+        print('this is kalman gain', kalman_gain)
+        print('this is kalman gain shape', kalman_gain.shape)
+
+        updated_mu = pred_mu_up + kalman_gain @ residual_mean
+        print('this is updated_mu', updated_mu)
+        print('this is updated_mu shape', updated_mu.shape)
+        updated_sigma = pred_cov_up - kalman_gain @ H_kal @ pred_cov_up
+        print('this is updated_sigma', updated_sigma)
+        print('this is updated_sigma', updated_sigma.shape)
+
+        #self.belief = {'mean': updated_mu, 'covariance': updated_sigma}
+        #print('this is belief in update', self.belief)
 
         # TODO: Apply the update equations for the Kalman Filter to self.belief
 
